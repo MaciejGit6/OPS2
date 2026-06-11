@@ -72,6 +72,27 @@ typedef struct {
     pthread_mutex_t mutex;
 } gamestate_t;
 
+shared_t* shared_init(void)
+{
+    shared_t* shm = mmap(NULL, sizeof(*shm), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    if (shm == MAP_FAILED)
+        ERR("mmap");
+
+    pthread_mutexattr_t attr;
+    if (pthread_mutexattr_init(&attr) != 0)
+        ERR("pthread_mutexattr_init");
+    if (pthread_mutexattr_setpshared(&attr, PTHREAD_PROCESS_SHARED) != 0)
+        ERR("pthread_mutexattr_setpshared");
+    if (pthread_mutexattr_setrobust(&attr, PTHREAD_MUTEX_ROBUST) != 0)
+        ERR("pthread_mutexattr_setrobust");
+    if (pthread_mutex_init(&shm->mutex, &attr) != 0)
+        ERR("pthread_mutex_init");
+    pthread_mutexattr_destroy(&attr);
+
+    shm->stop = 0;
+    return shm;
+}
+
 void queue_init(queue_t* queue) {
     pthread_mutex_init(&queue->mutex, NULL);
     sem_init(&queue->sem, 0, 0);

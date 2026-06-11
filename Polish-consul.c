@@ -34,6 +34,25 @@ typedef struct message_t
     char buff[16];
 } message_t;
 
+typedef struct
+{
+    pthread_mutex_t mutex;
+    unsigned stop : 1;
+} shared_t;
+
+uint16_t parse_port(char* arg)
+{
+    char* end;
+    errno = 0;
+    long val = strtol(arg, &end, 10);
+    if (errno != 0 || *end != '\0' || val < 1 || val > 65535)
+    {
+        fprintf(stderr, "error: invalid port %s\n", arg);
+        exit(EXIT_FAILURE);
+    }
+    return (uint16_t)val;
+}
+
 typedef struct __attribute__((__packed__)) cast_message_t
 {
     char type;
@@ -197,6 +216,32 @@ void usage(char* name)
     printf("%s <in_port>\n", name);
     printf("  in_port - port that accepts messages\n");
     exit(EXIT_FAILURE);
+}
+
+void launch_threads(pthread_t* tids, int count, void* (*start_routine)(void*), void* args, size_t arg_size)
+{
+    for (int i = 0; i < count; i++)
+    {
+        int err = pthread_create(&tids[i], NULL, start_routine, (char*)args + i * arg_size);
+        if (err != 0)
+        {
+            errno = err;
+            ERR("pthread_create");
+        }
+    }
+}
+
+void join_threads(pthread_t* tids, int count)
+{
+    for (int i = 0; i < count; i++)
+    {
+        int err = pthread_join(tids[i], NULL);
+        if (err != 0)
+        {
+            errno = err;
+            ERR("pthread_join");
+        }
+    }
 }
 
 void* worker(void* args)
