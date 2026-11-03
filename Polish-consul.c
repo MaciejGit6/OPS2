@@ -1,4 +1,5 @@
 #include "l8_common.h"
+#include <stddef.h>
 
 #define SPELL_TYPES 3
 const char* spell_names[SPELL_TYPES] = {"Divination", "Summon Elemental", "Fireball"};
@@ -13,6 +14,7 @@ const char* spell_names[SPELL_TYPES] = {"Divination", "Summon Elemental", "Fireb
 #define MAX_NAME_LENGTH 14
 
 #define MAX_BUFF_LEN 16
+#define RECV_BUFF_LEN 64
 
 // typedef struct __attribute__((__packed__)) packed
 // {
@@ -101,6 +103,7 @@ typedef struct
     beloved_t Misha;
     beloved_t Zosia;
     int started;
+    int stop;
     queue_t queue;
     pthread_mutex_t mutex;
 } gamestate_t;
@@ -152,6 +155,8 @@ void gamestate_init(gamestate_t* game)
     game->Zosia.logged = 0;
     game->Misha.logged = 0;
     game->started = 0;
+    game->stop = 0;
+    pthread_mutex_init(&game->mutex, NULL);
     queue_init(&game->queue);
 }
 
@@ -253,6 +258,11 @@ void* worker(void* args)
         cast_message_t message = queue_pop(&game->queue);
 
         pthread_mutex_lock(&game->mutex);
+        if (game->stop)
+        {
+            pthread_mutex_unlock(&game->mutex);
+            break;
+        }
         char* name;
         if (message.padding == 0)
         {
@@ -267,6 +277,7 @@ void* worker(void* args)
 
         // for that player implement the logic, some if statements
     }
+    return NULL;
 }
 
 void doServer(int fd)
@@ -278,25 +289,26 @@ void doServer(int fd)
 
     for (int i = 0; i < THREAD_COUNT; i++)
     {
-        if (pthread_create(&threads[i], NULL, worker, &game) < 0)
+        if (pthread_create(&threads[i], NULL, worker, &game) != 0)
             ERR("pthread_create");
     }
 
     struct sockaddr_in addr;
     socklen_t addr_len;
-    char buff[MAX_BUFF_LEN + 1];
-    memset(buff, 0, 17);
+    char buff[RECV_BUFF_LEN + 1];
     int count_message = 0;
     while (count_message <= 4)
     {
         int message_len;
-        if ((message_len = recvfrom(fd, buff, MAX_BUFF_LEN, 0, (struct sockaddr*)&addr, &addr_len)) < 0)
+        addr_len = sizeof(addr);
+        memset(buff, 0, sizeof(buff));
+        if ((message_len = recvfrom(fd, buff, RECV_BUFF_LEN, 0, (struct sockaddr*)&addr, &addr_len)) < 0)
         {
             perror("recvfrom");
             continue;
         }
 
-        if (message_len < 16)
+        if (message_len < 1)
         {
             printf("message of incorrect length\n");
             continue;
@@ -304,14 +316,25 @@ void doServer(int fd)
 
         if (buff[0] == 'l')
         {
+            int name_len = message_len - (int)offsetof(login_message_t, name);
+            if (name_len < 1)
+            {
+                printf("message of incorrect length\n");
+                continue;
+            }
+            if (name_len > MAX_NAME_LENGTH)
+                name_len = MAX_NAME_LENGTH;
+
             login_message_t* message;
             message = (login_message_t*)buff;
-            printf("[Login] Welcome, <%s>\n", message->name);
             count_message++;
 
             beloved_t beloved;
+            memset(&beloved, 0, sizeof(beloved));
             beloved.addr = addr;
-            strcpy(beloved.name, message->name);
+            memcpy(beloved.name, message->name, name_len);
+            beloved.name[name_len] = '\0';
+            printf("[Login] Welcome, <%s>\n", beloved.name);
             beloved.logged = 1;
             beloved.pebbles = 10;
             pthread_mutex_lock(&game.mutex);
@@ -330,6 +353,11 @@ void doServer(int fd)
             pthread_mutex_unlock(&game.mutex);
             if (buff[0] == 'c')
             {
+                if (message_len < (int)sizeof(cast_message_t))
+                {
+                    printf("message of incorrect length\n");
+                    continue;
+                }
                 cast_message_t* message;
                 message = (cast_message_t*)buff;
 
@@ -353,7 +381,6 @@ void doServer(int fd)
             else if (buff[0] == 'q')
             {
                 break;
-                count_message++;
             }
 
             else
@@ -362,10 +389,18 @@ void doServer(int fd)
             }
         }
     }
+    pthread_mutex_lock(&game.mutex);
+    game.stop = 1;
+    pthread_mutex_unlock(&game.mutex);
+    for (int i = 0; i < THREAD_COUNT; i++)
+        sem_post(&game.queue.sem);
+
     for (int i = 0; i < THREAD_COUNT; i++)
     {
         pthread_join(threads[i], NULL);
     }
+    queue_destroy(&game.queue);
+    pthread_mutex_destroy(&game.mutex);
 }
 
 int main(int argc, char** argv)
