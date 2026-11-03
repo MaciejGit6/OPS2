@@ -19,6 +19,8 @@
 #include <sys/un.h>
 #include <unistd.h>
 #include <semaphore.h>
+#include <stdatomic.h>
+#include <time.h>
 
 #ifndef TEMP_FAILURE_RETRY
 #define TEMP_FAILURE_RETRY(expression)             \
@@ -71,7 +73,7 @@ typedef struct {
 } Report;
 
 typedef struct {
-    volatile sig_atomic_t do_work;
+    atomic_int do_work; /* read by every thread, so atomic rather than volatile */
     int server_socket;
     uint16_t port;
 
