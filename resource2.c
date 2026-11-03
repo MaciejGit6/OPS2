@@ -64,11 +64,13 @@ int push_ring(ring_buffer_t* rb, packet_t pkt) {
 int pop_ring(ring_buffer_t* rb, packet_t* out_pkt) {
     sem_wait(&rb->sem);
 
-    if (!do_work && rb->count == 0) {
+    pthread_mutex_lock(&rb->mtx);
+
+    if (rb->count == 0) {
+        /* woken up by shutdown, nothing left to do */
+        pthread_mutex_unlock(&rb->mtx);
         return 0;
     }
-
-    pthread_mutex_lock(&rb->mtx);
 
     *out_pkt = rb->buf[rb->head];
     rb->head = (rb->head + 1) % RING_SIZE;
@@ -157,19 +159,19 @@ int main(int argc, char** argv) {
 
         new_pkt.client_len = sizeof(new_pkt.client_addr);
 
-        ssize_t n = TEMP_FAILURE_RETRY(
-            recvfrom(
-                server_fd,
-                new_pkt.buffer,
-                BUFFER_SIZE - 1,
-                0,
-                (struct sockaddr*)&new_pkt.client_addr,
-                &new_pkt.client_len
-            )
+        /* No TEMP_FAILURE_RETRY here: we want SIGINT to break us out of
+         * recvfrom so the loop can see do_work == 0. */
+        ssize_t n = recvfrom(
+            server_fd,
+            new_pkt.buffer,
+            BUFFER_SIZE - 1,
+            0,
+            (struct sockaddr*)&new_pkt.client_addr,
+            &new_pkt.client_len
         );
 
-        if (n < 0 && do_work == 0) {
-            break;
+        if (n < 0 && errno == EINTR) {
+            continue;
         }
 
         if (n < 0) {
