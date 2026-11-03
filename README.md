@@ -21,6 +21,12 @@ and a binary wire protocol.
 - **Graceful shutdown**: SIGINT handled with `sigwait` in a dedicated
   thread of control, blocked threads woken by semaphore posts and a
   loopback packet, and every thread joined before resources are freed.
+- **Event-driven I/O**: a single-threaded `epoll` TCP server that handles
+  partial reads, hang-ups and `SIGPIPE`, with race-free signal handling
+  via `epoll_pwait`.
+- **Condition variables done right**: wait-in-a-loop, `broadcast` on
+  close, a `pthread_barrier` for a common start, and batching so the
+  pipeline scales instead of fighting over the lock.
 - **Cross-process synchronisation**: a robust, process-shared mutex in
   `mmap`'d memory that recovers (`EOWNERDEAD`) if a child dies holding it.
 
@@ -28,7 +34,9 @@ and a binary wire protocol.
 
 | Directory | What it is | Key techniques |
 |---|---|---|
-| [`spell-duel/`](spell-duel/server.c) | Two-player real-time UDP game server | worker pool, referee thread, binary protocol, game state under one mutex |
+| [`spell-duel/`](spell-duel/) | Two-player real-time UDP game: [server](spell-duel/server.c) and interactive [client](spell-duel/client.c) | worker pool, referee thread, binary protocol; client multiplexes stdin and socket with `poll` |
+| [`tcp-chat/`](tcp-chat/server.c) | Multi-client TCP chat server | `epoll`, non-blocking accept, per-client line buffering, `epoll_pwait` signal mask |
+| [`pipeline/`](pipeline/main.c) | Producers → workers → collector, counting primes | condition-variable bounded queues, close-to-shutdown, barrier, batching |
 | [`hq-tracker/`](hq-tracker/hq_tracker.c) | Unit-tracking "headquarters" that ingests position reports and sends orders back | listener → bounded buffer → 4 workers, per-row locks, `sigwait` shutdown |
 | [`udp-thread-pool/`](udp-thread-pool/server.c) | Generic UDP request/response server | ring buffer, 4-worker pool, SIGINT-driven shutdown |
 | [`process-pool/`](process-pool/main.c) | Multi-process skeleton: 10 forked workers sharing state with the parent | `fork`, `mmap(MAP_SHARED)`, robust process-shared mutex |
@@ -99,6 +107,9 @@ translation unit:
 
 ```sh
 gcc -std=gnu11 -Wall -Wextra -O2 -pthread -o spell-duel-server spell-duel/server.c
+gcc -std=gnu11 -Wall -Wextra -O2 -pthread -o spell-duel-client spell-duel/client.c
+gcc -std=gnu11 -Wall -Wextra -O2 -pthread -o tcp-chat        tcp-chat/server.c
+gcc -std=gnu11 -Wall -Wextra -O2 -pthread -o pipeline        pipeline/main.c
 gcc -std=gnu11 -Wall -Wextra -O2 -pthread -o hq-tracker      hq-tracker/hq_tracker.c
 gcc -std=gnu11 -Wall -Wextra -O2 -pthread -o udp-thread-pool udp-thread-pool/server.c
 gcc -std=gnu11 -Wall -Wextra -O2 -pthread -o process-pool    process-pool/main.c
@@ -115,7 +126,15 @@ Start the game server:
 ./spell-duel-server 9000
 ```
 
-Then play a few moves from Python in another terminal:
+Then open two more terminals and join as two players:
+
+```sh
+./spell-duel-client localhost 9000 Alice
+./spell-duel-client localhost 9000 Bob
+```
+
+Type `s 3 3` to claim a cell, `d 3 3` to look around, `f 3 3` to burn
+your opponent's cells, `h` for help. Or script a game from Python:
 
 ```python
 import socket, struct, time
@@ -139,9 +158,13 @@ while len(msg := bob.recv(64)) != 1:
 print("Bob gets:", msg)  # b'w'
 ```
 
-The other servers are just as easy to try:
+The other programs are just as easy to try:
 
 ```sh
+./tcp-chat 9003                                    # then, in several terminals:
+nc localhost 9003
+
+./pipeline 2 8 5000000                             # 2 producers, 8 workers
 ./hq-tracker 9001                                  # then:
 echo -n "12 34 1 Old Guard" | nc -u -w1 localhost 9001
 
