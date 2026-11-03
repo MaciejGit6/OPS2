@@ -1,24 +1,27 @@
+/* Shared helpers for the programs in this repo: error handling,
+ * EINTR-safe wrappers, and UDP/TCP socket setup. */
+#ifndef COMMON_H
+#define COMMON_H
+
 #define _GNU_SOURCE
 #include <arpa/inet.h>
-#include <assert.h>
-#include <ctype.h>
 #include <errno.h>
-#include <fcntl.h>
-#include <netdb.h>
 #include <netinet/in.h>
 #include <pthread.h>
+#include <semaphore.h>
 #include <signal.h>
 #include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/epoll.h>
+#include <sys/mman.h>
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <sys/types.h>
-#include <sys/un.h>
+#include <time.h>
 #include <unistd.h>
-#include <semaphore.h>
 
 #ifndef TEMP_FAILURE_RETRY
 #define TEMP_FAILURE_RETRY(expression)             \
@@ -33,13 +36,13 @@
 
 #define ERR(source) (perror(source), fprintf(stderr, "%s:%d\n", __FILE__, __LINE__), exit(EXIT_FAILURE))
 
-void ms_sleep(unsigned int milli)
+static inline void ms_sleep(unsigned int milli)
 {
     struct timespec ts = {milli / 1000, (milli % 1000) * 1000000L};
     nanosleep(&ts, NULL);
 }
 
-int sethandler(void (*f)(int), int sigNo)
+static inline int sethandler(void (*f)(int), int sigNo)
 {
     struct sigaction act;
     memset(&act, 0, sizeof(struct sigaction));
@@ -49,16 +52,28 @@ int sethandler(void (*f)(int), int sigNo)
     return 0;
 }
 
-int make_socket(int domain, int type)
+static inline uint16_t parse_port(const char* arg)
 {
-    int sock;
-    sock = socket(domain, type, 0);
+    char* end;
+    errno = 0;
+    long val = strtol(arg, &end, 10);
+    if (errno != 0 || *end != '\0' || val < 1 || val > 65535)
+    {
+        fprintf(stderr, "error: invalid port %s\n", arg);
+        exit(EXIT_FAILURE);
+    }
+    return (uint16_t)val;
+}
+
+static inline int make_socket(int domain, int type)
+{
+    int sock = socket(domain, type, 0);
     if (sock < 0)
         ERR("socket");
     return sock;
 }
 
-int bind_inet_socket(uint16_t port, int type, int backlog)
+static inline int bind_inet_socket(uint16_t port, int type, int backlog)
 {
     struct sockaddr_in addr;
     int socketfd, t = 1;
@@ -69,7 +84,7 @@ int bind_inet_socket(uint16_t port, int type, int backlog)
     addr.sin_addr.s_addr = htonl(INADDR_ANY);
     if (setsockopt(socketfd, SOL_SOCKET, SO_REUSEADDR, &t, sizeof(t)))
         ERR("setsockopt");
-    if (bind(socketfd, (struct sockaddr *)&addr, sizeof(addr)) < 0)
+    if (bind(socketfd, (struct sockaddr*)&addr, sizeof(addr)) < 0)
         ERR("bind");
     if (SOCK_STREAM == type)
         if (listen(socketfd, backlog) < 0)
@@ -77,9 +92,9 @@ int bind_inet_socket(uint16_t port, int type, int backlog)
     return socketfd;
 }
 
-ssize_t bulk_read(int fd, char *buf, size_t count)
+static inline ssize_t bulk_read(int fd, char* buf, size_t count)
 {
-    int c;
+    ssize_t c;
     size_t len = 0;
     do
     {
@@ -95,9 +110,9 @@ ssize_t bulk_read(int fd, char *buf, size_t count)
     return len;
 }
 
-ssize_t bulk_write(int fd, char *buf, size_t count)
+static inline ssize_t bulk_write(int fd, char* buf, size_t count)
 {
-    int c;
+    ssize_t c;
     size_t len = 0;
     do
     {
@@ -110,3 +125,5 @@ ssize_t bulk_write(int fd, char *buf, size_t count)
     } while (count > 0);
     return len;
 }
+
+#endif

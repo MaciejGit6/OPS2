@@ -1,32 +1,5 @@
-#define _GNU_SOURCE
-#include <arpa/inet.h>
-#include <errno.h>
-#include <netinet/in.h>
-#include <pthread.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <sys/mman.h>
-#include <sys/socket.h>
-#include <sys/time.h>
-#include <sys/types.h>
+#include "../common/common.h"
 #include <sys/wait.h>
-#include <time.h>
-#include <unistd.h>
-
-#ifndef TEMP_FAILURE_RETRY
-#define TEMP_FAILURE_RETRY(expression)             \
-    (__extension__({                               \
-        long int __result;                         \
-        do                                         \
-            __result = (long int)(expression);     \
-        while (__result == -1L && errno == EINTR); \
-        __result;                                  \
-    }))
-#endif
-
-#define ERR(source) (perror(source), fprintf(stderr, "%s:%d\n", __FILE__, __LINE__), exit(EXIT_FAILURE))
-
 
 #define MSG_MAX 64
 #define RUN_MS 3000
@@ -45,57 +18,11 @@ void usage(char* name)
     exit(EXIT_FAILURE);
 }
 
-void ms_sleep(unsigned int milli)
-{
-    struct timespec ts = {milli / 1000, (milli % 1000) * 1000000L};
-    nanosleep(&ts, NULL);
-}
-
 long now_ms(void)
 {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return ts.tv_sec * 1000L + ts.tv_nsec / 1000000L;
-}
-
-int make_socket(int domain, int type)
-{
-    int sock = socket(domain, type, 0);
-    if (sock < 0)
-        ERR("socket");
-    return sock;
-}
-
-int bind_inet_socket(uint16_t port, int type, int backlog)
-{
-    struct sockaddr_in addr;
-    int socketfd, t = 1;
-    socketfd = make_socket(PF_INET, type);
-    memset(&addr, 0, sizeof(struct sockaddr_in));
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(port);
-    addr.sin_addr.s_addr = htonl(INADDR_ANY);
-    if (setsockopt(socketfd, SOL_SOCKET, SO_REUSEADDR, &t, sizeof(t)))
-        ERR("setsockopt");
-    if (bind(socketfd, (struct sockaddr*)&addr, sizeof(addr)) < 0)
-        ERR("bind");
-    if (SOCK_STREAM == type)
-        if (listen(socketfd, backlog) < 0)
-            ERR("listen");
-    return socketfd;
-}
-
-uint16_t parse_port(char* arg)
-{
-    char* end;
-    errno = 0;
-    long val = strtol(arg, &end, 10);
-    if (errno != 0 || *end != '\0' || val < 1 || val > 65535)
-    {
-        fprintf(stderr, "error: invalid port %s\n", arg);
-        exit(EXIT_FAILURE);
-    }
-    return (uint16_t)val;
 }
 
 shared_t* shared_init(void)

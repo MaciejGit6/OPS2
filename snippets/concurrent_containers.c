@@ -1,3 +1,7 @@
+/* Reference implementations of thread-safe containers (ring buffer,
+ * linked-list queue/stack, min-heap, BST). Not a standalone program:
+ * copy what you need and provide a data_t with P, X, Y and divis_name. */
+
 #define RING_SIZE 32
 
 void lock_robust(pthread_mutex_t* m)

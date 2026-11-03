@@ -1,5 +1,4 @@
-#include "l8_common.h"
-#include <stddef.h>
+#include "../common/common.h"
 
 #define SPELL_TYPES 3
 const char* spell_names[SPELL_TYPES] = {"Divination", "Summon Elemental", "Fireball"};
@@ -41,19 +40,6 @@ typedef struct
     pthread_mutex_t mutex;
     unsigned stop : 1;
 } shared_t;
-
-uint16_t parse_port(char* arg)
-{
-    char* end;
-    errno = 0;
-    long val = strtol(arg, &end, 10);
-    if (errno != 0 || *end != '\0' || val < 1 || val > 65535)
-    {
-        fprintf(stderr, "error: invalid port %s\n", arg);
-        exit(EXIT_FAILURE);
-    }
-    return (uint16_t)val;
-}
 
 typedef struct __attribute__((__packed__)) cast_message_t
 {

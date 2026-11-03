@@ -1,13 +1,4 @@
-#include "l8_common.h"
-#include <stddef.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <unistd.h>
-#include <pthread.h>
-#include <semaphore.h>
-#include <arpa/inet.h>
-#include <sys/socket.h>
+#include "../common/common.h"
 
 #define SPELL_TYPES 3
 const char* spell_names[SPELL_TYPES] = {"Divination", "Summon Elemental", "Fireball"};
