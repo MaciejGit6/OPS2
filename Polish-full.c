@@ -1,4 +1,5 @@
 #include "l8_common.h"
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -22,6 +23,8 @@ const int spell_costs[SPELL_TYPES] = {1, 3, 4};
 #define MAX_CLIENTS 2
 #define MAX_NAME_LENGTH 14
 #define MAX_BUFF_LEN 16
+#define RECV_BUFF_LEN 64
+#define RECV_TIMEOUT_MS 200
 
 typedef struct message_t {
     char buff[16];
@@ -151,6 +154,20 @@ int get_beloved_index(gamestate_t* game, struct sockaddr_in addr) {
     return -1;
 }
 
+int game_is_over(gamestate_t* game) {
+    pthread_mutex_lock(&game->mutex);
+    int over = game->game_over;
+    pthread_mutex_unlock(&game->mutex);
+    return over;
+}
+
+/* Pebbles can go negative; don't let that wrap into a huge uint16 on the wire. */
+void send_pebbles(gamestate_t* game, beloved_t* player) {
+    int pebbles = player->pebbles < 0 ? 0 : player->pebbles;
+    uint16_t net_pebbles = htons((uint16_t)pebbles);
+    sendto(game->server_fd, &net_pebbles, sizeof(net_pebbles), 0, (struct sockaddr*)&player->addr, sizeof(player->addr));
+}
+
 void* worker(void* args) {
     gamestate_t* game = args;
 
@@ -211,8 +228,7 @@ void* worker(void* args) {
 
         printf("[Cast] <%s> casts <%s> onto <%hu>,<%hu>\n", player->name, spell_names[message.spell], message.X, message.Y);
         
-        uint16_t net_pebbles = htons((uint16_t)player->pebbles);
-        sendto(game->server_fd, &net_pebbles, sizeof(net_pebbles), 0, (struct sockaddr*)&player->addr, sizeof(player->addr));
+        send_pebbles(game, player);
         
         pthread_mutex_unlock(&game->mutex);
         usleep(FAMILIAR_DELAY * 1000);
@@ -263,10 +279,8 @@ void* judge_thread(void* args) {
 
         printf("Pouches | %s: %d pebbles | %s: %d pebbles\n", game->Misha.name, game->Misha.pebbles, game->Zosia.name, game->Zosia.pebbles);
 
-        uint16_t p_m = htons((uint16_t)game->Misha.pebbles);
-        sendto(game->server_fd, &p_m, 2, 0, (struct sockaddr*)&game->Misha.addr, sizeof(game->Misha.addr));
-        uint16_t p_z = htons((uint16_t)game->Zosia.pebbles);
-        sendto(game->server_fd, &p_z, 2, 0, (struct sockaddr*)&game->Zosia.addr, sizeof(game->Zosia.addr));
+        send_pebbles(game, &game->Misha);
+        send_pebbles(game, &game->Zosia);
 
         int m_dead = (game->Misha.pebbles <= 0 && dk_misha < 0);
         int z_dead = (game->Zosia.pebbles <= 0 && dk_zosia < 0);
@@ -294,43 +308,62 @@ void doServer(int fd) {
     gamestate_init(&game, fd);
 
     for (int i = 0; i < THREAD_COUNT; i++) {
-        if (pthread_create(&threads[i], NULL, worker, &game) < 0)
-            perror("pthread_create worker");
+        if (pthread_create(&threads[i], NULL, worker, &game) != 0)
+            ERR("pthread_create worker");
     }
-    if (pthread_create(&judge, NULL, judge_thread, &game) < 0) {
-        perror("pthread_create judge");
-    }
+    if (pthread_create(&judge, NULL, judge_thread, &game) != 0)
+        ERR("pthread_create judge");
+
+    /* recvfrom must wake up now and then, otherwise we never notice the
+     * judge ending the game until somebody sends another packet. */
+    struct timeval tv = {0, RECV_TIMEOUT_MS * 1000};
+    if (setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) < 0)
+        ERR("setsockopt");
 
     struct sockaddr_in addr;
     socklen_t addr_len;
-    char buff[MAX_BUFF_LEN + 1];
+    char buff[RECV_BUFF_LEN + 1];
 
-    while (!game.game_over) {
+    while (!game_is_over(&game)) {
         addr_len = sizeof(addr);
         memset(buff, 0, sizeof(buff));
         
         int message_len;
-        if ((message_len = recvfrom(fd, buff, MAX_BUFF_LEN, 0, (struct sockaddr*)&addr, &addr_len)) < 0) {
-            perror("recvfrom");
+        if ((message_len = recvfrom(fd, buff, RECV_BUFF_LEN, 0, (struct sockaddr*)&addr, &addr_len)) < 0) {
+            if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR)
+                perror("recvfrom");
             continue;
         }
 
-        if (message_len < 16) {
+        if (message_len < 1) {
             printf("message of incorrect length\n");
             continue;
         }
 
         if (buff[0] == 'l') {
-            if (game.started) {
+            int name_len = message_len - (int)offsetof(login_message_t, name);
+            if (name_len < 1) {
+                printf("message of incorrect length\n");
+                continue;
+            }
+            if (name_len > MAX_NAME_LENGTH)
+                name_len = MAX_NAME_LENGTH;
+
+            pthread_mutex_lock(&game.mutex);
+            int started = game.started;
+            pthread_mutex_unlock(&game.mutex);
+            if (started) {
                 printf("Game already started, rejecting login.\n");
                 continue;
             }
             login_message_t* message = (login_message_t*)buff;
-            printf("[Login] Welcome, <%s>\n", message->name);
 
             beloved_t beloved;
+            memset(&beloved, 0, sizeof(beloved));
             beloved.addr = addr;
-            strcpy(beloved.name, message->name);
+            memcpy(beloved.name, message->name, name_len);
+            beloved.name[name_len] = '\0';
+            printf("[Login] Welcome, <%s>\n", beloved.name);
             beloved.logged = 1;
             beloved.pebbles = 10;
             
@@ -354,6 +387,10 @@ void doServer(int fd) {
             }
 
             if (buff[0] == 'c') {
+                if (message_len < (int)sizeof(cast_message_t)) {
+                    printf("message of incorrect length\n");
+                    continue;
+                }
                 cast_message_t* message = (cast_message_t*)buff;
                 message->spell = ntohs(message->spell);
                 message->X = ntohs(message->X);
