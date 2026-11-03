@@ -1,4 +1,5 @@
 #include "l8_common.h"
+#include <stddef.h>
 
 #define MAX_NAME_LEN 128
 #define BACKLOG 16
@@ -27,9 +28,13 @@ void doServer(int fd)
         socklen_t addr_len = sizeof(addr);
         int recv_len = recvfrom(fd, buff, MAX_BUFF_LENGTH, 0, (struct sockaddr *)&addr, &addr_len);
         if (recv_len < 0) { perror("recvfrom"); continue; }
+        if (recv_len < (int)offsetof(message_t, division_name)) {
+            fprintf(stderr, "message too short (%d bytes)\n", recv_len);
+            continue;
+        }
         message_t* message = (message_t*)buff;
         buff[recv_len]='\0';
-        printf("%hu:%hu [ally?] %hu [name]: %s\n", message->X, message->Y, message->P, message->division_name);
+        printf("%hu:%hu [ally?] %hu [name]: %s\n", ntohs(message->X), ntohs(message->Y), ntohs(message->P), message->division_name);
 
 
         
