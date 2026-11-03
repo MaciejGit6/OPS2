@@ -121,6 +121,48 @@ shared_t* shared_init(void)
 
 
 
+void lock_robust(pthread_mutex_t* m)
+{
+    int err = pthread_mutex_lock(m);
+    if (err == EOWNERDEAD)
+    {
+        if (pthread_mutex_consistent(m) != 0)
+            ERR("pthread_mutex_consistent");
+    }
+    else if (err != 0)
+    {
+        errno = err;
+        ERR("pthread_mutex_lock");
+    }
+}
+
+void unlock(pthread_mutex_t* m)
+{
+    int err = pthread_mutex_unlock(m);
+    if (err != 0)
+    {
+        errno = err;
+        ERR("pthread_mutex_unlock");
+    }
+}
+
+void slave_work(shared_t* shm, int id)
+{
+    while (1)
+    {
+        lock_robust(&shm->mutex);
+        unsigned stop = shm->stop;
+        unlock(&shm->mutex);
+
+        if (stop)
+            break;
+
+        printf("[slave %d] I am not yet implemented\n", id);
+        fflush(stdout);
+        ms_sleep(500);
+    }
+}
+
 void recv_loop(int sockfd)
 {
     struct timeval tv = {0, 200000};
